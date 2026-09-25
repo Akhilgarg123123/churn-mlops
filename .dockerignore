@@ -1,0 +1,10 @@
+venv/
+data/
+notebooks/
+mlruns/
+mlartifacts/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+requirements-train.txt
