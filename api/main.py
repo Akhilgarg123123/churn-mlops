@@ -12,18 +12,33 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ARTIFACT_DIR = Path(__file__).resolve().parent.parent / "artifacts"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="Churn Prediction API")
 
 # Loaded once at startup, reused for every request -- not reloaded per call.
-model = joblib.load(ARTIFACT_DIR / "champion_model.joblib")
-meta = json.loads((ARTIFACT_DIR / "champion_meta.json").read_text())
+# Fails loudly and clearly if the artifacts didn't make it into the image
+# (e.g. a Dockerfile COPY step missing or a .dockerignore excluding them),
+# rather than a confusing crash deep inside the pipeline later.
+try:
+    model = joblib.load(ARTIFACT_DIR / "champion_model.joblib")
+    meta = json.loads((ARTIFACT_DIR / "champion_meta.json").read_text())
+except FileNotFoundError as e:
+    raise RuntimeError(
+        f"Model artifacts missing at {ARTIFACT_DIR} -- did the Dockerfile COPY step run?"
+    ) from e
+
 THRESHOLD = meta["decision_threshold"]
 FEATURES = meta["features"]  # exact column list + order the pipeline was trained on
+
+# Serves index.html + any assets under api/static/ at /ui
+if STATIC_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
 
 
 class CustomerData(BaseModel):
@@ -48,6 +63,15 @@ class CustomerData(BaseModel):
     TotalCharges: float
 
 
+@app.get("/")
+def root():
+    return {
+        "message": "Churn Prediction API is running",
+        "docs": "/docs",
+        "ui": "/ui" if STATIC_DIR.exists() else None,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -66,8 +90,12 @@ def predict(data: CustomerData):
     # training; the ColumnTransformer selects by name either way, but this
     # also makes a missing/misnamed field fail loudly here instead of deep
     # inside the pipeline.
-    row = pd.DataFrame([data.model_dump()])[FEATURES]
-    prob = float(model.predict_proba(row)[0, 1])
+    try:
+        row = pd.DataFrame([data.model_dump()])[FEATURES]
+        prob = float(model.predict_proba(row)[0, 1])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Prediction failed: {e}")
+
     return {
         "churn_probability": round(prob, 4),
         "risk": "high" if prob >= THRESHOLD else "low",

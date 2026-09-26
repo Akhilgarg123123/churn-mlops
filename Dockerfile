@@ -10,8 +10,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Only what serving actually needs: the API code and the exported model.
 # No src/ (training-only), no data/, no mlruns/ -- keeps the image small
 # and means a broken training script can never break the deployed API.
-COPY api/ api/
-COPY artifacts/ artifacts/
+RUN useradd -m -u 1000 user
 
-EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY --chown=user:user api/ api/
+COPY --chown=user:user artifacts/ artifacts/
+
+USER user
+
+EXPOSE 7860
+CMD uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-7860}
