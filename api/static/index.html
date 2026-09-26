@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Churn Prediction</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #6366f1;
+    --high: #ef4444; --low: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); padding: 32px 16px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; }
+  form {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px;
+  }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: #0b1220; color: var(--text);
+    font-size: 0.9rem;
+  }
+  .actions { grid-column: 1 / -1; margin-top: 8px; }
+  button {
+    background: var(--accent); color: white; border: none;
+    padding: 10px 20px; border-radius: 8px; font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #result {
+    margin-top: 20px; padding: 20px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--card); display: none;
+  }
+  #result.show { display: block; }
+  .prob { font-size: 2rem; font-weight: 700; }
+  .risk-high { color: var(--high); }
+  .risk-low { color: var(--low); }
+  .error { color: var(--high); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Churn Prediction</h1>
+  <p class="sub">Enter a customer's details to estimate churn risk.</p>
+
+  <form id="form"></form>
+
+  <div id="result"></div>
+</div>
+
+<script>
+// Field definitions: [name, type, options-or-null]
+const FIELDS = [
+  ["gender", "select", ["Female", "Male"]],
+  ["SeniorCitizen", "select", ["0", "1"]],
+  ["Partner", "select", ["Yes", "No"]],
+  ["Dependents", "select", ["Yes", "No"]],
+  ["tenure", "number", null],
+  ["PhoneService", "select", ["Yes", "No"]],
+  ["MultipleLines", "select", ["Yes", "No", "No phone service"]],
+  ["InternetService", "select", ["DSL", "Fiber optic", "No"]],
+  ["OnlineSecurity", "select", ["Yes", "No", "No internet service"]],
+  ["OnlineBackup", "select", ["Yes", "No", "No internet service"]],
+  ["DeviceProtection", "select", ["Yes", "No", "No internet service"]],
+  ["TechSupport", "select", ["Yes", "No", "No internet service"]],
+  ["StreamingTV", "select", ["Yes", "No", "No internet service"]],
+  ["StreamingMovies", "select", ["Yes", "No", "No internet service"]],
+  ["Contract", "select", ["Month-to-month", "One year", "Two year"]],
+  ["PaperlessBilling", "select", ["Yes", "No"]],
+  ["PaymentMethod", "select", [
+    "Electronic check", "Mailed check",
+    "Bank transfer (automatic)", "Credit card (automatic)"
+  ]],
+  ["MonthlyCharges", "number", null],
+  ["TotalCharges", "number", null],
+];
+
+const form = document.getElementById("form");
+
+FIELDS.forEach(([name, type, options]) => {
+  const wrap = document.createElement("div");
+  const label = document.createElement("label");
+  label.textContent = name;
+  label.htmlFor = name;
+  wrap.appendChild(label);
+
+  let input;
+  if (type === "select") {
+    input = document.createElement("select");
+    options.forEach(opt => {
+      const o = document.createElement("option");
+      o.value = opt; o.textContent = opt;
+      input.appendChild(o);
+    });
+  } else {
+    input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.required = true;
+    input.value = "0";
+  }
+  input.id = name;
+  input.name = name;
+  wrap.appendChild(input);
+  form.appendChild(wrap);
+});
+
+const actions = document.createElement("div");
+actions.className = "actions";
+const btn = document.createElement("button");
+btn.type = "submit";
+btn.textContent = "Predict";
+actions.appendChild(btn);
+form.appendChild(actions);
+
+const resultDiv = document.getElementById("result");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  btn.disabled = true;
+  btn.textContent = "Predicting...";
+  resultDiv.className = "show";
+  resultDiv.innerHTML = "";
+
+  const payload = {};
+  FIELDS.forEach(([name, type]) => {
+    const el = document.getElementById(name);
+    payload[name] = type === "number" ? parseFloat(el.value) : el.value;
+  });
+  // SeniorCitizen is int, not string
+  payload.SeniorCitizen = parseInt(payload.SeniorCitizen, 10);
+
+  try {
+    // Relative path -- works whether this page is served from the same
+    // FastAPI app (via /ui) or opened locally against a running API on
+    // the same host/port.
+    const res = await fetch("/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    const pct = (data.churn_probability * 100).toFixed(1);
+    const riskClass = data.risk === "high" ? "risk-high" : "risk-low";
+
+    resultDiv.innerHTML = `
+      <div class="prob ${riskClass}">${pct}% churn probability</div>
+      <div class="${riskClass}" style="font-weight:600; margin-top:4px;">
+        Risk level: ${data.risk.toUpperCase()}
+      </div>
+    `;
+  } catch (err) {
+    resultDiv.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Predict";
+  }
+});
+</script>
+</body>
+</html>
